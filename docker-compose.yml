@@ -73,6 +73,7 @@ services:
   postgres_feat:
     image: postgres:15-alpine
     environment:
+      USE_BIOBERT: false
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: root
       POSTGRES_DB: featDB
