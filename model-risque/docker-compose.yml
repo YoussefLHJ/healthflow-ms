@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  model-risque-db:
+    image: postgres:15
+    container_name: model-risque-db
+    environment:
+      POSTGRES_DB: modelrisqueDB
+      POSTGRES_USER: modeluser
+      POSTGRES_PASSWORD: modelpass
+    ports:
+      - "5401:5432"
+    volumes:
+      - model_risque_db_data:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - healthcare_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U modeluser -d modelrisqueDB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  model-risque:
+    build: .
+    container_name: model-risque
+    ports:
+      - "8002:8002"
+    environment:
+      - MODEL_DB_URL=postgresql://modeluser:modelpass@model-risque-db:5432/modelrisqueDB
+      - FEATURIZER_API_URL=http://featurizer:8001
+      - MODEL_PATH=/app/trained_models/xgboost/readmission_model.pkl
+      - SCALER_PATH=/app/trained_models/xgboost/scaler.pkl
+      - FEATURE_COLUMNS_PATH=/app/trained_models/metadata/feature_columns.json
+    volumes:
+      - ./trained_models:/app/trained_models
+      - ./app:/app/app
+    networks:
+      - healthcare_network
+    depends_on:
+      model-risque-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  healthcare_network:
+    external: true
+
+volumes:
+  model_risque_db_data:

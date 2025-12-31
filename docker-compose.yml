@@ -1,0 +1,303 @@
+version: '3.9'
+
+services:
+  # Audit Fairness
+  audit-fairness-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: audit_fairness
+      POSTGRES_USER: audit
+      POSTGRES_PASSWORD: auditpassword
+    ports:
+      - "5434:5432"
+    volumes:
+      - audit_fairness_db_data:/var/lib/postgresql/data
+    networks:
+      - healthcare_network
+
+  audit-fairness:
+    build:
+      context: ./AuditFairness-microservice
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg2://audit:auditpassword@audit-fairness-db:5432/audit_fairness
+      SCORE_API_BASE: http://score-api:8080
+    ports:
+      - "8100:8100"
+    depends_on:
+      - audit-fairness-db
+      - score-api
+    networks:
+      - healthcare_network
+
+  # DeID
+  postgres_deid:
+    image: postgres:15-alpine
+    container_name: deid-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: deid
+    ports:
+      - "5435:5432"  # Adjusted to avoid conflict
+    volumes:
+      - postgres_deid_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - healthcare_network
+
+  deid-microservice:
+    build:
+      context: ./deid-microservice
+      dockerfile: Dockerfile
+    container_name: deid-microservice
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres_deid:5432/deid
+      FHIR_PROXY_BASE_URL: http://proxyfhir-app-1:8080
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres_deid:
+        condition: service_healthy
+    volumes:
+      - ./deid-microservice/app:/app/app
+    networks:
+      - healthcare_network
+    restart: unless-stopped
+
+  # Featurizer
+  postgres_feat:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: featDB
+    volumes:
+      - postgres_feat_data:/var/lib/postgresql/data
+      - ./featurizer/migrations/create_tables.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5433:5432"
+    networks:
+      - healthcare_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d featDB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  featurizer:
+    build:
+      context: ./featurizer
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      DEID_BASE_URL: http://deid-microservice:8000
+      DATABASE_URL: postgresql://postgres:root@postgres_feat:5432/featDB
+      FHIR_PROXY_BASE_URL: http://proxyfhir-app-1:8080
+      USE_BIOBERT: false
+    depends_on:
+      postgres_feat:
+        condition: service_healthy
+      deid-microservice:
+        condition: service_started
+    networks:
+      - healthcare_network
+    volumes:
+      - ./featurizer/.env:/app/.env:ro
+
+  # Model Risque
+  model-risque-db:
+    image: postgres:15
+    container_name: model-risque-db
+    environment:
+      POSTGRES_DB: modelrisqueDB
+      POSTGRES_USER: modeluser
+      POSTGRES_PASSWORD: modelpass
+    ports:
+      - "5401:5432"
+    volumes:
+      - model_risque_db_data:/var/lib/postgresql/data
+      - ./model-risque/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - healthcare_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U modeluser -d modelrisqueDB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  model-risque:
+    build:
+      context: ./model-risque
+      dockerfile: Dockerfile
+    container_name: model-risque
+    ports:
+      - "8002:8002"
+    environment:
+      - MODEL_DB_URL=postgresql://modeluser:modelpass@model-risque-db:5432/modelrisqueDB
+      - FEATURIZER_API_URL=http://featurizer:8001
+      - MODEL_PATH=/app/trained_models/xgboost/readmission_model.pkl
+      - SCALER_PATH=/app/trained_models/xgboost/scaler.pkl
+      - FEATURE_COLUMNS_PATH=/app/trained_models/metadata/feature_columns.json
+    volumes:
+      - ./model-risque/trained_models:/app/trained_models
+      - ./model-risque/app:/app/app
+    networks:
+      - healthcare_network
+    depends_on:
+      model-risque-db:
+        condition: service_healthy
+      featurizer:
+        condition: service_started
+    restart: unless-stopped
+
+  # ProxyFHIR
+  proxyfhir-db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: proxyfhir
+      POSTGRES_PASSWORD: proxyfhir
+      POSTGRES_DB: proxyfhir
+    ports:
+      - "5402:5432"  # Adjusted to avoid conflict
+    volumes:
+      - proxyfhir_db_data:/var/lib/postgresql/data
+    networks:
+      - healthcare_network
+
+  synthea:
+    image: eclipse-temurin:17
+    working_dir: /synthea-sample
+    volumes:
+      - ./ProxyFHIR/synthea-sample:/synthea
+    environment:
+      NUM_PATIENTS: 580
+    command: ["sh", "-c", "if [ \"${SKIP_SYNTH:-false}\" = \"true\" ]; then echo 'skipping synthea generation'; sleep 1; else sh /synthea/generate.sh 580; fi"]
+    restart: 'no'
+    networks:
+      - healthcare_network
+
+  proxyfhir-app-1:
+    build:
+      context: ./ProxyFHIR
+      dockerfile: Dockerfile
+    container_name: proxyfhir-app-1
+    ports:
+      - "8081:8080"  # Adjusted host port to avoid conflict with score-api
+    volumes:
+      - ./ProxyFHIR/synthea-sample:/synthea
+    depends_on:
+      - proxyfhir-db
+      - synthea
+    networks:
+      - healthcare_network
+    environment:
+      NUM_PATIENTS: 580
+      SPRING_DATASOURCE_URL: jdbc:postgresql://proxyfhir-db:5432/proxyfhir
+      SPRING_DATASOURCE_USERNAME: proxyfhir
+      SPRING_DATASOURCE_PASSWORD: proxyfhir
+      SYNTHEA_FILES_DIR: /synthea/580-patients
+      SYNTHEA_IMPORT_DIR: /synthea/580-patients
+    command: ["sh", "-c", "while [ ! -d /synthea/580-patients ]; do echo 'waiting for synthea output dir...'; sleep 1; done; echo 'found directory'; while [ ! -f /synthea/580-patients/log.ndjson ]; do echo 'waiting for synthea to finish (log.ndjson not present)...'; sleep 1; done; echo 'found log.ndjson, starting app'; java -jar /app/app.jar --synthea.files.dir=/synthea/580-patients --synthea.import.dir=/synthea/580-patients"]
+
+  # Score API
+  scoreapi-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: scoreapi
+      POSTGRES_USER: score
+      POSTGRES_PASSWORD: scorepassword
+    ports:
+      - "5436:5432"  # Adjusted to avoid conflict
+    volumes:
+      - scoreapi_db_data:/var/lib/postgresql/data
+    networks:
+      - healthcare_network
+
+  score-api:
+    build:
+      context: ./ScoreAPI
+      dockerfile: Dockerfile
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://scoreapi-db:5432/scoreapi
+      SPRING_DATASOURCE_USERNAME: score
+      SPRING_DATASOURCE_PASSWORD: scorepassword
+      SERVER_PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - scoreapi-db
+    networks:
+      - healthcare_network
+
+  # Eureka Server (added based on directory and Dockerfile)
+  eureka-server:
+    build:
+      context: ./eureka-server
+      dockerfile: Dockerfile
+    ports:
+      - "8761:8761"
+    networks:
+      - healthcare_network
+    # Add depends_on or environment if needed (e.g., for self-registration)
+
+  # Gateway (added based on directory and Dockerfile; adjust port if not 8888)
+  gateway:
+    build:
+      context: ./GateWay
+      dockerfile: Dockerfile
+    ports:
+      - "8888:8888"
+    networks:
+      - healthcare_network
+    # Add depends_on (e.g., eureka-server) or environment (e.g., Eureka client config) if needed
+
+  # SonarQube
+  sonarqube-db:
+    image: postgres:latest
+    environment:
+      - POSTGRES_DB=sonarqube
+      - POSTGRES_USER=sonar
+      - POSTGRES_PASSWORD=sonar_pass
+    volumes:
+      - sonarqube_postgres_data:/var/lib/postgresql/data
+    networks:
+      - healthcare_network
+
+  sonarqube:
+    image: sonarqube:latest
+    ports:
+      - "9999:9000"
+    environment:
+      - SONARQUBE_JDBC_URL=jdbc:postgresql://sonarqube-db:5432/sonarqube
+      - SONARQUBE_JDBC_USERNAME=sonar
+      - SONARQUBE_JDBC_PASSWORD=sonar_pass
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    depends_on:
+      - sonarqube-db
+    networks:
+      - healthcare_network
+
+volumes:
+  audit_fairness_db_data:
+  postgres_deid_data:
+  postgres_feat_data:
+  model_risque_db_data:
+  proxyfhir_db_data:
+  scoreapi_db_data:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+  sonarqube_postgres_data:
+
+networks:
+  healthcare_network:
+    external: true

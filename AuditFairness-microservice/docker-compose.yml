@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  audit-fairness-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: audit_fairness
+      POSTGRES_USER: audit
+      POSTGRES_PASSWORD: auditpassword
+    ports:
+      - "5434:5432"
+    volumes:
+      - audit_fairness_db_data:/var/lib/postgresql/data
+
+  audit-fairness:
+    build:
+      context: ./AuditFairness-microservice
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg2://audit:auditpassword@audit-fairness-db:5432/audit_fairness
+      SCORE_API_BASE: http://score-api:8080   # adjust to your existing score-api service name/port
+    ports:
+      - "8100:8100"
+    depends_on:
+      - audit-fairness-db
+    # if you already have a score-api service in another compose, wire networks accordingly
+
+volumes:
+  audit_fairness_db_data:

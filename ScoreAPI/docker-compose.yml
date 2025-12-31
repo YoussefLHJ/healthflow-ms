@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  scoreapi-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: scoreapi
+      POSTGRES_USER: score
+      POSTGRES_PASSWORD: scorepassword
+    ports:
+      - "5433:5432"
+    volumes:
+      - scoreapi_db_data:/var/lib/postgresql/data
+
+  score-api:
+    build:
+      context: ./ScoreAPI          # path to the Spring Boot project
+      dockerfile: Dockerfile
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://scoreapi-db:5432/scoreapi
+      SPRING_DATASOURCE_USERNAME: score
+      SPRING_DATASOURCE_PASSWORD: scorepassword
+      # Optional: set server port explicitly
+      SERVER_PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - scoreapi-db
+
+  audit-fairness:
+    # as defined earlier, but point SCORE_API_BASE at score-api
+    environment:
+      SCORE_API_BASE: http://score-api:8080
+      DATABASE_URL: postgresql+psycopg2://audit:auditpassword@audit-fairness-db:5432/audit_fairness
+    # ...
+
+volumes:
+  scoreapi_db_data:
+  audit_fairness_db_data:

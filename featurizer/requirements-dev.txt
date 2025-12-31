@@ -1,0 +1,28 @@
+# Development requirements (lighter and faster to install)
+# Core FastAPI dependencies
+fastapi==0.123.5
+uvicorn[standard]==0.33.0
+pydantic==2.12.5
+httpx==0.28.1
+
+# Database
+psycopg2-binary==2.9.11
+sqlalchemy==2.1.4
+alembic==1.17.2
+
+# Data processing (lighter versions)
+numpy==1.26.4
+pandas==2.1.4
+
+# Utilities
+python-dotenv==1.0.1
+python-dateutil==2.9.0
+requests==2.32.5
+PyYAML==6.0.2
+
+# Optional NLP dependencies (comment out for faster builds)
+# Uncomment these when you need full NLP features:
+# scikit-learn==1.4.2
+# sentence-transformers==3.0.1
+# spacy>=3.7.0,<3.8.0
+# en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl

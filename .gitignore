@@ -1,0 +1,72 @@
+# IDE and Editor
+.vscode
+.idea
+*.swp
+*.swo
+
+# Python
+.conda/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+venv/
+env/
+.env
+
+# Java
+*.class
+*.jar
+!gradle-wrapper.jar
+target/
+*.war
+*.ear
+*.log
+
+# Machine Learning Models
+*.pkl
+*.h5
+*.hdf5
+*.pb
+*.pth
+*.onnx
+*.joblib
+trained_models/
+models/
+*.model
+
+# Data files
+*.csv
+*.ndjson
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+*.parquet
+*.feather
+*.hdf
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+
+# Synthea
+**/synthea/*.jar
+**/synthea/**/*.ndjson
+**/synthea/*-patients/
+
+
+node_modules/
